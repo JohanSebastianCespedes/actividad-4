@@ -1,41 +1,74 @@
-# actividad-4
- 1. Estructura de la Interfaz y Estilos (HTML & CSS)
-Para la parte visual del chatbot, creé dos elementos principales fijados en la esquina inferior derecha mediante CSS (position: fixed):
+import streamlit as st
+import pandas as pd
+import polars as pl
+import matplotlib.pyplot as plt
 
-El botón flotante (#chat-widget-button): Un botón circular con un gradiente dorado y verde que activa o desactiva la ventana del chat mediante la función toggleChat().
+# Configuración de página estilo Dark Mode / Trading Dashboard
+st.set_page_config(page_title="Dashboard de Inversión - Coink", page_icon="📈", layout="wide")
 
-El contenedor de la ventana (#chat-box-container): Diseñado con un estilo oscuro acorde a la interfaz de la página. Tiene una cabecera con botón de cierre, un área central deslizable (#chat-messages) con overflow-y: auto para acumular el historial de mensajes, y la barra inferior de entrada con un <input> y su botón de envío.
+st.title("📈 Dashboard de Análisis y Performance de Inversión - Coink")
+st.markdown("Módulo analítico inspirado en gestión de portafolios y volumen de transacciones para calificar el rendimiento de los usuarios.")
 
-2. Captura y Manejo de Mensajes (JavaScript)
-Para hacer la interacción fluida, vinculé la función sendMessage() tanto al evento de clic del botón enviar como al presionar la tecla Enter (handleKeyPress(event)).
+# Cargar datos eficientemente con Polars y pasarlos a Pandas
+@st.cache_data
+def cargar_datos():
+    df_pl = pl.read_csv("depositos_oinks.csv")
+    return df_pl.to_pandas()
 
-Cuando el usuario envía un mensaje:
+try:
+    df = cargar_datos()
 
-Extraigo el texto escrito, lo limpio con .trim() y lo muestro inmediatamente en el historial como un mensaje del usuario llamando a appendMessage(text, 'user').
+    # Agrupamos los datos simulando métricas de portafolio (Volumen y Frecuencia de Órdenes)
+    resumen = df.groupby('user_id').agg(
+        capital_total=('operation_value', 'sum'),
+        frecuencia_operaciones=('operation_value', 'count'),
+        ticket_promedio=('operation_value', 'mean')
+    ).reset_index()
 
-Convierto todo el texto a mayúsculas (.toUpperCase()) para evaluar fácilmente lo que escribió el usuario sin preocuparme por minúsculas o tildes.
+    # Normalización para calcular el índice IRAI (Escala de 0 a 100)
+    max_capital = resumen['capital_total'].max()
+    max_freq = resumen['frecuencia_operaciones'].max()
 
-3. Reconocimiento de Intención y Símbolos Cripto
-Implementé una lógica de coincidencia que busca si el mensaje del usuario contiene el nombre o el símbolo de una criptomoneda dentro de una lista previa (['BTC', 'BITCOIN', 'ETH', 'ETHEREUM', 'SOL', 'SOLANA', 'XRP', 'DOGE', ...]):
+    resumen['norm_capital'] = resumen['capital_total'] / max_capital
+    resumen['norm_freq'] = resumen['frecuencia_operaciones'] / max_freq
+    
+    # Cálculo del IRAI (60% Volumen de Capital, 40% Frecuencia de Operación)
+    resumen['IRAI'] = ((resumen['norm_capital'] * 0.6) + (resumen['norm_freq'] * 0.4)) * 100
 
-Si el usuario escribe "Bitcoin" o "BTC", el código lo mapea automáticamente al símbolo estándar BTC.
+    def clasificar_trader(irai):
+        if irai >= 40:
+            return "Trader Pro / Ballena ⭐"
+        elif irai >= 15:
+            return "Inversionista Constante 🟢"
+        else:
+            return "Trader Junior 🟠"
 
-Hago lo mismo para Ethereum (ETH), Solana (SOL) y otros activos populares.
+    resumen['Perfil'] = resumen['IRAI'].apply(clasificar_trader)
+    resumen = resumen.sort_values(by='IRAI', ascending=False)
 
-4. Consulta a la API en Tiempo Real (fetch) e Integración Async/Await
-Una vez identificado el activo:
+    # Panel de Métricas Clave (KPIs estilo Terminal de Trading)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Inversionistas", len(resumen))
+    col2.metric("Volumen Global Operado", f"${resumen['capital_total'].sum():,.2f}")
+    col3.metric("IRAI Promedio del Portafolio", f"{resumen['IRAI'].mean():.2f} pts")
 
-Muestro un mensaje temporal indicando que estoy consultando el mercado.
+    st.subheader("📊 Tabla de Calificación de Actividad y Performance")
+    st.dataframe(resumen[['user_id', 'capital_total', 'frecuencia_operaciones', 'ticket_promedio', 'IRAI', 'Perfil']].head(15), use_container_width=True)
 
-Ejecuto una petición asíncrona mediante fetch() utilizando async/await conectándome a la API pública de CryptoCompare ([https://min-api.cryptocompare.com/data/price?fsym=SIMBOLO&tsyms=USD](https://min-api.cryptocompare.com/data/price?fsym=SIMBOLO&tsyms=USD)).
+    # Gráfica de Rendimiento con Matplotlib (Diseño limpio acorde al análisis técnico)
+    st.subheader("📉 Top 10 Portafolios con Mayor Rendimiento (IRAI)")
+    top10 = resumen.head(10)
+    
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.barh(top10['user_id'].str[:8] + "...", top10['IRAI'], color='#f39c12')
+    ax.set_xlabel("Puntaje IRAI (0 - 100)")
+    ax.set_ylabel("ID de Usuario / Wallet")
+    ax.set_title("Ranking de Rendimiento de Usuarios en la Red")
+    ax.set_xlim(0, 100)
+    ax.invert_yaxis()
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    
+    st.pyplot(fig)
 
-Al recibir la respuesta en JSON, formateo la cifra de dólares en pantalla con .toLocaleString() para mostrar el precio del activo actualizado en tiempo real.
-
-5. Sistema de Respaldo y Manejo de Errores (Fallback / Try...Catch)
-Para prevenir que el chatbot falle si no hay conexión a internet o si la API llega a estar fuera de servicio:
-
-Envolví la petición dentro de un bloque try...catch.
-
-Si la API no responde, el bloque catch entra en acción inmediatamente y consulta un objeto local llamado realPrices donde tengo guardadas las cotizaciones de referencia.
-
-De esta manera, el chatbot siempre le entrega una respuesta válida al usuario y la aplicación se mantiene 100% estable sin importar las condiciones de la red.
+except Exception as e:
+    st.error(f"Error procesando el dataset de transacciones: {e}")
